@@ -1,23 +1,24 @@
-name: Mission Block Trick17 V4
+name: Mission Block Trick17 V5
 
 on:
   push:
     branches:
-      - mission-block-trick17-v4
+      - mission-block-trick17-v5
+  workflow_dispatch:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build-trick17-v4:
+  build-trick17-v5:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Trick17 V4 branch
+      - name: Checkout Trick17 V5 branch
         uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Apply Mission Block V4 instrumentation
+      - name: Apply Mission Block V5 instrumentation
         shell: bash
         run: |
           set -euo pipefail
@@ -26,15 +27,13 @@ jobs:
           python3 .github/scripts/mission_v3_patch.py
           python3 .github/scripts/mission_v3_fixup.py
           python3 .github/scripts/mission_v4_patch.py
-          grep -F 'MB_V4_TUNE' components/asic/bm1370.c
-          grep -F 'target_unique=1024' components/asic/bm1370.c
-          grep -F 'mb_version_bins[(rolled16 >> 3) & 31]' components/asic/bm1370.c
-          grep -F 'MB_SPACE report=' components/asic/bm1370.c
+          python3 .github/scripts/mission_v5_patch.py
+          grep -F 'MB_V5_GATE' components/asic/bm1370.c
+          grep -F 'HCN99.5' components/asic/bm1370.c
+          grep -F 'range=95..100' components/asic/bm1370.c
           grep -F 'MB_WRAP' components/asic/bm1370.c
           grep -F 'MB_TX' components/asic/serial.c
-          grep -F 'MB_SHARE_DUP' main/tasks/asic_result_task.c
           grep -F 'MB_STALE' main/tasks/asic_result_task.c
-          grep -F 'MB_RECOVERY' components/asic/asic_common.c
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -55,24 +54,23 @@ jobs:
           command: GITHUB_ACTIONS="true" idf.py build
           path: '.'
 
-      - name: Verify Trick17 V4 OTA
+      - name: Verify Trick17 V5 OTA
         shell: bash
         run: |
           set -euo pipefail
           test -s build/esp-miner.bin
           SIZE=$(stat -c%s build/esp-miner.bin)
-          echo "Trick17 V4 OTA size: $SIZE bytes"
+          echo "Trick17 V5 OTA size: $SIZE bytes"
           test "$SIZE" -lt 4194304
-          sha256sum build/esp-miner.bin > esp-miner-trick17-v4.sha256
-          strings build/esp-miner.bin | grep -F 'MB_V4_TUNE'
-          strings build/esp-miner.bin | grep -F 'target_unique=1024'
-          strings build/esp-miner.bin | grep -F 'raw_auto=0'
+          sha256sum build/esp-miner.bin > esp-miner-trick17-v5.sha256
+          strings build/esp-miner.bin | grep -F 'MB_V5_GATE'
+          strings build/esp-miner.bin | grep -F 'range=95..100'
 
-      - name: Upload Mission Block Trick17 V4 OTA
+      - name: Upload Mission Block Trick17 V5 OTA
         uses: actions/upload-artifact@v4
         with:
-          name: esp-miner-mission-block-trick17-v4-ota
+          name: esp-miner-mission-block-trick17-v5-ota
           path: |
             ./build/esp-miner.bin
-            ./esp-miner-trick17-v4.sha256
+            ./esp-miner-trick17-v5.sha256
           if-no-files-found: error
