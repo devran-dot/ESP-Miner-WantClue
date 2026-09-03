@@ -24,12 +24,14 @@ jobs:
           python3 .github/scripts/mission_research_patch.py
           python3 .github/scripts/mission_trick17_patch.py
           python3 .github/scripts/mission_v3_patch.py
+          python3 .github/scripts/mission_v3_fixup.py
           grep -F 'MB_AUTOTUNE' components/asic/bm1370.c
           grep -F 'MB_WRAP' components/asic/bm1370.c
           grep -F 'MB_SPACE' components/asic/bm1370.c
           grep -F 'MB_TX' components/asic/serial.c
           grep -F 'MB_SHARE_DUP' main/tasks/asic_result_task.c
           grep -F 'MB_STALE' main/tasks/asic_result_task.c
+          grep -F 'MB_RECOVERY' components/asic/asic_common.c
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
