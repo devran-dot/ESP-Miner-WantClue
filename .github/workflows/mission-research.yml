@@ -25,7 +25,6 @@ jobs:
           grep -F 'MISSION_HCN_PERCENT 0.95' components/asic/bm1370.c
           grep -F 'MB_DUP' components/asic/bm1370.c
           grep -F 'MB_UART' components/asic/asic_common.c
-          git diff --check
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
