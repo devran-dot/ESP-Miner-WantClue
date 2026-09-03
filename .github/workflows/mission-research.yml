@@ -1,30 +1,33 @@
-name: Mission Block Research
+name: Mission Block Trick17 V2
 
 on:
   push:
     branches:
-      - mission-block-research-v1
+      - mission-block-trick17-v2
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build-research:
+  build-trick17:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout research branch
+      - name: Checkout Trick17 branch
         uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Apply BM1370 research instrumentation
+      - name: Apply Mission Block instrumentation
         shell: bash
         run: |
           set -euo pipefail
           python3 .github/scripts/mission_research_patch.py
+          python3 .github/scripts/mission_trick17_patch.py
           grep -F 'MISSION_HCN_PERCENT 0.95' components/asic/bm1370.c
           grep -F 'MB_DUP' components/asic/bm1370.c
           grep -F 'MB_UART' components/asic/asic_common.c
+          grep -F 'MB_TX' components/asic/serial.c
+          grep -F 'MB_SPACE' components/asic/bm1370.c
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -45,21 +48,21 @@ jobs:
           command: GITHUB_ACTIONS="true" idf.py build
           path: '.'
 
-      - name: Verify research OTA
+      - name: Verify Trick17 OTA
         shell: bash
         run: |
           set -euo pipefail
           test -s build/esp-miner.bin
           SIZE=$(stat -c%s build/esp-miner.bin)
-          echo "Research OTA size: $SIZE bytes"
+          echo "Trick17 OTA size: $SIZE bytes"
           test "$SIZE" -lt 4194304
-          sha256sum build/esp-miner.bin > esp-miner-research.sha256
+          sha256sum build/esp-miner.bin > esp-miner-trick17-v2.sha256
 
-      - name: Upload Mission Block Research OTA
+      - name: Upload Mission Block Trick17 OTA
         uses: actions/upload-artifact@v4
         with:
-          name: esp-miner-mission-block-research-ota
+          name: esp-miner-mission-block-trick17-v2-ota
           path: |
             ./build/esp-miner.bin
-            ./esp-miner-research.sha256
+            ./esp-miner-trick17-v2.sha256
           if-no-files-found: error
