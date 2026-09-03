@@ -1,15 +1,15 @@
-name: Mission Block HCN95
+name: Mission Block Max Stable
 
 on:
   push:
     branches:
-      - mission-block-hcn95-final
+      - mission-block-max-stable
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build-hcn95:
+  build-max-stable:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact source branch
@@ -17,19 +17,92 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply single-line BM1370 HCN95 experiment
+      - name: Apply Mission Block BM1370 stability patch
         shell: bash
         run: |
           set -euo pipefail
-          FILE=components/asic/bm1370.c
-          BEFORE='BM1370_set_nonce_space(1.0, frequency, asic_count, cores);'
-          AFTER='BM1370_set_nonce_space(0.95, frequency, asic_count, cores);'
-          test "$(grep -Fxc "    $BEFORE" "$FILE")" -eq 1
-          sed -i "s/BM1370_set_nonce_space(1\.0, frequency, asic_count, cores);/BM1370_set_nonce_space(0.95, frequency, asic_count, cores);/" "$FILE"
-          test "$(grep -Fxc "    $AFTER" "$FILE")" -eq 1
+          python3 - <<'PY'
+          from pathlib import Path
+
+          bm = Path('components/asic/bm1370.c')
+          s = bm.read_text()
+
+          def replace_once(old, new):
+              global s
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one match, got {count}: {old[:80]!r}')
+              s = s.replace(old, new, 1)
+
+          replace_once(
+              'static task_result result;\n',
+              '''static task_result result;\n\n#define MISSION_BLOCK_DUP_CACHE_SIZE 256\n\ntypedef struct {\n    uint8_t job_id;\n    uint32_t nonce;\n    uint32_t rolled_version;\n    bool valid;\n} mission_block_dup_entry_t;\n\nstatic mission_block_dup_entry_t mission_block_dup_cache[MISSION_BLOCK_DUP_CACHE_SIZE];\nstatic uint16_t mission_block_dup_cursor = 0;\nstatic uint32_t mission_block_unique_results = 0;\nstatic uint32_t mission_block_duplicate_results = 0;\n\nstatic bool mission_block_is_duplicate(uint8_t job_id, uint32_t nonce, uint32_t rolled_version)\n{\n    for (size_t i = 0; i < MISSION_BLOCK_DUP_CACHE_SIZE; i++) {\n        const mission_block_dup_entry_t *e = &mission_block_dup_cache[i];\n        if (e->valid && e->job_id == job_id && e->nonce == nonce && e->rolled_version == rolled_version) {\n            mission_block_duplicate_results++;\n            if (mission_block_duplicate_results == 1 || (mission_block_duplicate_results % 64) == 0) {\n                ESP_LOGW(TAG, \"MissionBlock duplicate filtered: total=%lu unique=%lu job=%u nonce=%08lx version=%08lx\",\n                         (unsigned long)mission_block_duplicate_results,\n                         (unsigned long)mission_block_unique_results,\n                         (unsigned)job_id,\n                         (unsigned long)nonce,\n                         (unsigned long)rolled_version);\n            }\n            return true;\n        }\n    }\n\n    mission_block_dup_entry_t *slot = &mission_block_dup_cache[mission_block_dup_cursor];\n    slot->job_id = job_id;\n    slot->nonce = nonce;\n    slot->rolled_version = rolled_version;\n    slot->valid = true;\n    mission_block_dup_cursor = (mission_block_dup_cursor + 1) % MISSION_BLOCK_DUP_CACHE_SIZE;\n    mission_block_unique_results++;\n\n    if ((mission_block_unique_results % 1024) == 0) {\n        ESP_LOGI(TAG, \"MissionBlock result telemetry: unique=%lu duplicates=%lu\",\n                 (unsigned long)mission_block_unique_results,\n                 (unsigned long)mission_block_duplicate_results);\n    }\n    return false;\n}\n''')
+
+          replace_once(
+              '''void BM1370_set_version_mask(uint32_t version_mask) \n{\n    int versions_to_roll = version_mask >> 13;\n    uint8_t version_byte0 = (versions_to_roll >> 8);\n    uint8_t version_byte1 = (versions_to_roll & 0xFF); \n    uint8_t version_cmd[] = {0x00, 0xA4, 0x90, 0x00, version_byte0, version_byte1};\n    _send_BM1370(TYPE_CMD | GROUP_ALL | CMD_WRITE, version_cmd, 6, BM1370_SERIALTX_DEBUG);\n}\n''',
+              '''void BM1370_set_version_mask(uint32_t version_mask) \n{\n    int versions_to_roll = version_mask >> 13;\n    uint8_t version_byte0 = (versions_to_roll >> 8);\n    uint8_t version_byte1 = (versions_to_roll & 0xFF); \n    uint8_t version_cmd[] = {0x00, 0xA4, 0x90, 0x00, version_byte0, version_byte1};\n    ESP_LOGI(TAG, \"MissionBlock version rolling mask: pool=%08lx register=A4:9000%02X%02X\",\n             (unsigned long)version_mask, version_byte0, version_byte1);\n    _send_BM1370(TYPE_CMD | GROUP_ALL | CMD_WRITE, version_cmd, 6, BM1370_SERIALTX_DEBUG);\n}\n''')
+
+          replace_once(
+              '''    uint32_t hcn_register_value = (uint32_t)hcn_frac;\n\n    BM1370_set_hash_counting_number(hcn_register_value);\n''',
+              '''    uint32_t hcn_register_value = (uint32_t)hcn_frac;\n\n    ESP_LOGI(TAG, \"MissionBlock HCN: percent=%.4f freq=%.2f cores=%u asics=%u reg10=0x%08lx\",\n             nonce_percent, frequency, (unsigned)cores, (unsigned)asic_count,\n             (unsigned long)hcn_register_value);\n    BM1370_set_hash_counting_number(hcn_register_value);\n''')
+
+          replace_once(
+              '    BM1370_set_nonce_space(1.0, frequency, asic_count, cores);\n',
+              '    BM1370_set_nonce_space(0.95, frequency, asic_count, cores);\n'
+          )
+
+          replace_once(
+              '''static uint8_t id = 0;\n\nvoid BM1370_send_work(GlobalState * GLOBAL_STATE, bm_job * next_bm_job)\n{\n    BM1370_job job;\n''',
+              '''static uint8_t id = 0;\nstatic uint32_t mission_block_jobs_sent = 0;\nstatic TickType_t mission_block_last_job_tick = 0;\n\nvoid BM1370_send_work(GlobalState * GLOBAL_STATE, bm_job * next_bm_job)\n{\n    BM1370_job job;\n    TickType_t now_tick = xTaskGetTickCount();\n    mission_block_jobs_sent++;\n    if ((mission_block_jobs_sent % 64) == 0) {\n        uint32_t age_ms = mission_block_last_job_tick == 0 ? 0 :\n            (uint32_t)((now_tick - mission_block_last_job_tick) * portTICK_PERIOD_MS);\n        ESP_LOGI(TAG, \"MissionBlock job telemetry: sent=%lu last_interval_ms=%lu\",\n                 (unsigned long)mission_block_jobs_sent, (unsigned long)age_ms);\n    }\n    mission_block_last_job_tick = now_tick;\n''')
+
+          replace_once(
+              '''    uint32_t rolled_version = GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[job_id]->version | version_bits;\n    pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock);\n\n    result.job_id = job_id;\n''',
+              '''    uint32_t rolled_version = GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[job_id]->version | version_bits;\n    pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock);\n\n    if (mission_block_is_duplicate(job_id, nonce_h, rolled_version)) {\n        return NULL;\n    }\n\n    result.job_id = job_id;\n''')
+
+          bm.write_text(s)
+
+          common = Path('components/asic/asic_common.c')
+          c = common.read_text()
+
+          def creplace_once(old, new):
+              global c
+              count = c.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one common match, got {count}: {old[:80]!r}')
+              c = c.replace(old, new, 1)
+
+          creplace_once(
+              'static const char * TAG = "common";\nstatic char asic_chain_error[96];\n',
+              '''static const char * TAG = "common";\nstatic char asic_chain_error[96];\n\nstatic uint32_t mission_block_uart_ok = 0;\nstatic uint32_t mission_block_uart_rx_error = 0;\nstatic uint32_t mission_block_uart_length_error = 0;\nstatic uint32_t mission_block_uart_preamble_error = 0;\nstatic uint32_t mission_block_uart_crc_error = 0;\n\nstatic void mission_block_log_uart_telemetry(void)\n{\n    uint32_t failures = mission_block_uart_rx_error + mission_block_uart_length_error +\n                        mission_block_uart_preamble_error + mission_block_uart_crc_error;\n    if ((mission_block_uart_ok != 0 && (mission_block_uart_ok % 4096) == 0) ||\n        (failures != 0 && (failures == 1 || (failures % 32) == 0))) {\n        ESP_LOGI(TAG, \"MissionBlock UART: ok=%lu rx=%lu length=%lu preamble=%lu crc=%lu\",\n                 (unsigned long)mission_block_uart_ok,\n                 (unsigned long)mission_block_uart_rx_error,\n                 (unsigned long)mission_block_uart_length_error,\n                 (unsigned long)mission_block_uart_preamble_error,\n                 (unsigned long)mission_block_uart_crc_error);\n    }\n}\n''')
+
+          creplace_once(
+              '''    if (received < 0) {\n        ESP_LOGE(TAG, "UART error in serial RX");\n        return ESP_FAIL;\n    }\n''',
+              '''    if (received < 0) {\n        mission_block_uart_rx_error++;\n        mission_block_log_uart_telemetry();\n        ESP_LOGE(TAG, "UART error in serial RX");\n        return ESP_FAIL;\n    }\n''')
+
+          creplace_once(
+              '''    if (received != buffer_size) {\n        ESP_LOGE(TAG, "Invalid response length %i", received);\n''',
+              '''    if (received != buffer_size) {\n        mission_block_uart_length_error++;\n        mission_block_log_uart_telemetry();\n        ESP_LOGE(TAG, "Invalid response length %i", received);\n''')
+
+          creplace_once(
+              '''    if (received_preamble != PREAMBLE) {\n        ESP_LOGE(TAG, "Preamble mismatch: got 0x%04x, expected 0x%04x", received_preamble, PREAMBLE);\n''',
+              '''    if (received_preamble != PREAMBLE) {\n        mission_block_uart_preamble_error++;\n        mission_block_log_uart_telemetry();\n        ESP_LOGE(TAG, "Preamble mismatch: got 0x%04x, expected 0x%04x", received_preamble, PREAMBLE);\n''')
+
+          creplace_once(
+              '''    if (crc5(buffer + 2, buffer_size - 2) != 0) {\n        ESP_LOGE(TAG, "Checksum failed on response");        \n''',
+              '''    if (crc5(buffer + 2, buffer_size - 2) != 0) {\n        mission_block_uart_crc_error++;\n        mission_block_log_uart_telemetry();\n        ESP_LOGE(TAG, "Checksum failed on response");        \n''')
+
+          creplace_once(
+              '''    return ESP_OK;\n}\n\nvoid get_difficulty_mask''',
+              '''    mission_block_uart_ok++;\n    mission_block_log_uart_telemetry();\n    return ESP_OK;\n}\n\nvoid get_difficulty_mask''')
+
+          common.write_text(c)
+          PY
+
+          grep -F 'BM1370_set_nonce_space(0.95, frequency, asic_count, cores);' components/asic/bm1370.c
+          grep -F 'MissionBlock duplicate filtered' components/asic/bm1370.c
+          grep -F 'MissionBlock UART:' components/asic/asic_common.c
           git diff --check
-          git diff --exit-code -- . ':(exclude)components/asic/bm1370.c' || exit 1
-          git diff -- components/asic/bm1370.c
+          git diff -- components/asic/bm1370.c components/asic/asic_common.c
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -58,12 +131,12 @@ jobs:
           SIZE=$(stat -c%s build/esp-miner.bin)
           echo "OTA size: $SIZE bytes"
           test "$SIZE" -lt 4194304
-          sha256sum build/esp-miner.bin | tee build/esp-miner-hcn95.sha256
+          sha256sum build/esp-miner.bin | tee build/esp-miner-max-stable.sha256
 
-      - name: Upload HCN95 OTA image
+      - name: Upload Mission Block Max Stable OTA image
         uses: actions/upload-artifact@v4
         with:
-          name: esp-miner-hcn95-ota
+          name: esp-miner-max-stable-ota
           path: |
             ./build/esp-miner.bin
-            ./build/esp-miner-hcn95.sha256
+            ./build/esp-miner-max-stable.sha256
