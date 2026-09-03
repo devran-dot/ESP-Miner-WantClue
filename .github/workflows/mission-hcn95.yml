@@ -1,0 +1,70 @@
+name: Mission Block HCN95
+
+on:
+  push:
+    branches:
+      - mission-block-hcn95-final
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-hcn95:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact source branch
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Apply single-line BM1370 HCN95 experiment
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=components/asic/bm1370.c
+          BEFORE='BM1370_set_nonce_space(1.0, frequency, asic_count, cores);'
+          AFTER='BM1370_set_nonce_space(0.95, frequency, asic_count, cores);'
+          test "$(grep -Fxc "    $BEFORE" "$FILE")" -eq 1
+          sed -i "s/BM1370_set_nonce_space(1\.0, frequency, asic_count, cores);/BM1370_set_nonce_space(0.95, frequency, asic_count, cores);/" "$FILE"
+          test "$(grep -Fxc "    $AFTER" "$FILE")" -eq 1
+          git diff --check
+          git diff --exit-code -- . ':(exclude)components/asic/bm1370.c' || exit 1
+          git diff -- components/asic/bm1370.c
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.14.0'
+
+      - name: Build web dist
+        working-directory: ./main/http_server/axe-os
+        run: |
+          npm ci
+          npm run build
+
+      - name: ESP-IDF build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32s3
+          command: GITHUB_ACTIONS="true" idf.py build
+          path: '.'
+
+      - name: Verify OTA image exists and fits 4 MiB slot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s build/esp-miner.bin
+          SIZE=$(stat -c%s build/esp-miner.bin)
+          echo "OTA size: $SIZE bytes"
+          test "$SIZE" -lt 4194304
+          sha256sum build/esp-miner.bin | tee esp-miner-hcn95.sha256
+
+      - name: Upload HCN95 OTA image
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp-miner-hcn95-ota
+          path: |
+            ./build/esp-miner.bin
+            ./esp-miner-hcn95.sha256
+          if-no-files-found: error
