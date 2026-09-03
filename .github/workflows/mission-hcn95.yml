@@ -58,7 +58,7 @@ jobs:
           SIZE=$(stat -c%s build/esp-miner.bin)
           echo "OTA size: $SIZE bytes"
           test "$SIZE" -lt 4194304
-          sha256sum build/esp-miner.bin | tee build/esp-miner-hcn95.sha256
+          sha256sum build/esp-miner.bin | tee esp-miner-hcn95.sha256
 
       - name: Upload HCN95 OTA image
         uses: actions/upload-artifact@v4
@@ -66,4 +66,5 @@ jobs:
           name: esp-miner-hcn95-ota
           path: |
             ./build/esp-miner.bin
-            ./build/esp-miner-hcn95.sha256
+            ./esp-miner-hcn95.sha256
+          if-no-files-found: error
